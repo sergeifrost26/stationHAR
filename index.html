@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>HAR Stream Finder</title>
+
+<style>
+body{
+    margin:0;
+    padding:20px;
+    font-family:Arial,sans-serif;
+    background:#f2f2f2;
+}
+
+h1{
+    margin-top:0;
+}
+
+#drop{
+    border:3px dashed #888;
+    border-radius:10px;
+    background:white;
+    padding:40px;
+    text-align:center;
+    cursor:pointer;
+    margin-bottom:20px;
+}
+
+#drop.drag{
+    background:#dff5ff;
+    border-color:#2196f3;
+}
+
+input{
+    display:none;
+}
+
+#search{
+    width:100%;
+    padding:10px;
+    font-size:16px;
+    box-sizing:border-box;
+    margin-bottom:15px;
+}
+
+#count{
+    margin-bottom:10px;
+    color:#555;
+}
+
+.row{
+    display:flex;
+    gap:10px;
+    align-items:center;
+    background:white;
+    padding:8px;
+    border-radius:6px;
+    margin-bottom:6px;
+}
+
+.url{
+    flex:1;
+    word-break:break-all;
+    font-size:14px;
+}
+
+button{
+    padding:6px 12px;
+    cursor:pointer;
+}
+</style>
+
+</head>
+<body>
+
+<h1>HAR Stream Finder</h1>
+
+<div id="drop">
+<b>Перетащи HAR сюда</b><br><br>
+или нажми сюда
+</div>
+
+<input type="file" id="file" accept=".har">
+
+<input id="search" placeholder="Поиск...">
+
+<div id="count"></div>
+
+<div id="list"></div>
+
+<script>
+
+const drop=document.getElementById("drop");
+const file=document.getElementById("file");
+const list=document.getElementById("list");
+const count=document.getElementById("count");
+const search=document.getElementById("search");
+
+let urls=[];
+
+drop.onclick=()=>file.click();
+
+drop.ondragover=e=>{
+    e.preventDefault();
+    drop.classList.add("drag");
+};
+
+drop.ondragleave=()=>{
+    drop.classList.remove("drag");
+};
+
+drop.ondrop=e=>{
+    e.preventDefault();
+    drop.classList.remove("drag");
+
+    if(e.dataTransfer.files.length)
+        loadFile(e.dataTransfer.files[0]);
+};
+
+file.onchange=()=>{
+    if(file.files.length)
+        loadFile(file.files[0]);
+};
+
+function loadFile(f){
+
+    const r=new FileReader();
+
+    r.onload=()=>{
+
+        try{
+
+            parseHAR(JSON.parse(r.result));
+
+        }catch(err){
+
+            alert("Это не HAR файл");
+
+        }
+
+    };
+
+    r.readAsText(f);
+
+}
+
+function parseHAR(har){
+
+    urls=[];
+
+    addFromObject(har);
+
+    if(har.log && har.log.entries){
+
+        har.log.entries.forEach(entry=>{
+
+            if(entry.request){
+
+                if(entry.request.url)
+                    urls.push(entry.request.url);
+
+                if(entry.request.headers)
+                    entry.request.headers.forEach(h=>{
+                        if(h.value) extractText(h.value);
+                    });
+
+            }
+
+            if(entry.response){
+
+                if(entry.response.redirectURL)
+                    urls.push(entry.response.redirectURL);
+
+                if(entry.response.headers)
+                    entry.response.headers.forEach(h=>{
+                        if(h.value) extractText(h.value);
+                    });
+
+                if(entry.response.content){
+
+                    if(entry.response.content.text)
+                        extractText(entry.response.content.text);
+
+                }
+
+            }
+
+        });
+
+    }
+
+    urls=[...new Set(urls)];
+
+    urls=urls.filter(u=>u.startsWith("http"));
+
+    urls.sort((a,b)=>score(b)-score(a));
+
+    draw();
+
+}
+
+function addFromObject(obj){
+
+    if(obj===null) return;
+
+    if(typeof obj==="string"){
+
+        extractText(obj);
+        return;
+
+    }
+
+    if(Array.isArray(obj)){
+
+        obj.forEach(addFromObject);
+        return;
+
+    }
+
+    if(typeof obj==="object"){
+
+        for(const k in obj)
+            addFromObject(obj[k]);
+
+    }
+
+}
+
+function extractText(text){
+
+    if(!text) return;
+
+    const m=text.match(/https?:\/\/[^\s"'<>\\]+/g);
+
+    if(m)
+        urls.push(...m);
+
+}
+
+function score(url){
+
+    url=url.toLowerCase();
+
+    let s=0;
+
+    [
+        ".mp3",
+        ".aac",
+        ".ogg",
+        ".m3u",
+        ".pls",
+        "stream",
+        "listen",
+        "radio",
+        "live",
+        "icecast",
+        "shoutcast",
+        "mount",
+        "audio",
+        "myradio24"
+    ].forEach(w=>{
+
+        if(url.includes(w))
+            s++;
+
+    });
+
+    return s;
+}
+
+function draw(){
+
+    const filter=search.value.toLowerCase();
+
+    list.innerHTML="";
+
+    let visible=0;
+
+    urls.forEach(url=>{
+
+        if(filter && !url.toLowerCase().includes(filter))
+            return;
+
+        
+        const u=url.toLowerCase();
+        const good=["stream","listen","radio","live","mount","icecast","shoutcast",".mp3",".aac",".ogg",".m3u",".pls","audio","myradio24"];
+        const bad=["google","gstatic","doubleclick","analytics","facebook","fonts.googleapis","fonts.gstatic",".css",".js",".png",".jpg",".jpeg",".gif",".svg",".ico",".woff",".woff2",".ttf","favicon"];
+        if(url.length>180) return;
+        if((url.match(/&/g)||[]).length>4) return;
+        if(bad.some(x=>u.includes(x))) return;
+        if(!good.some(x=>u.includes(x))) return;
+        visible++;
+
+
+        const row=document.createElement("div");
+        row.className="row";
+
+        const txt=document.createElement("div");
+        txt.className="url";
+        txt.textContent=url;
+
+        const btn=document.createElement("button");
+        btn.textContent="Копировать";
+
+        btn.onclick=()=>{
+
+            navigator.clipboard.writeText(url);
+
+            btn.textContent="✓";
+
+            setTimeout(()=>{
+                btn.textContent="Копировать";
+            },1000);
+
+        };
+
+        row.appendChild(txt);
+        row.appendChild(btn);
+
+        list.appendChild(row);
+
+    });
+
+    count.textContent="Найдено ссылок: "+visible;
+
+}
+
+search.oninput=draw;
+
+</script>
+
+</body>
+</html>
